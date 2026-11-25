@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isTeacherIdentity() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider == 'password';
+    }
+    function isTeacher() {
+      return isTeacherIdentity()
+        && exists(/databases/$(database)/documents/teachers/$(request.auth.uid));
+    }
+    function ownsClass(code) {
+      return isTeacher()
+        && get(/databases/$(database)/documents/classes/$(code)).data.ownerId == request.auth.uid;
+    }
+    function isStudent(uid) {
+      return request.auth != null && request.auth.uid == uid
+        && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+    function hasText(value, maximum) {
+      return value is string && value.size() > 0 && value.size() <= maximum;
+    }
+    function validHandover(data) {
+      return data is map && data.keys().hasAll(['education', 'reason'])
+        && data.keys().hasOnly(['education', 'reason'])
+        && hasText(data.education, 300) && hasText(data.reason, 800);
+    }
+    function validReport(data) {
+      return data is map
+        && data.keys().hasAll(['stats', 'news', 'unresolved', 'achievements', 'issues', 'timeline'])
+        && data.keys().hasOnly(['stats', 'news', 'unresolved', 'achievements', 'issues', 'timeline'])
+        && data.stats is list && data.stats.size() == 4
+        && data.stats[0] is int && data.stats[1] is int && data.stats[2] is int && data.stats[3] is int
+        && data.news is list && data.news.size() == 5
+        && data.unresolved is list && data.unresolved.size() <= 4
+        && data.achievements is list && data.achievements.size() <= 7
+        && data.issues is list && data.issues.size() <= 7
+        && data.timeline is list && data.timeline.size() >= 5 && data.timeline.size() <= 7;
+    }
+    match /teachers/{uid} {
+      allow get: if isTeacherIdentity() && request.auth.uid == uid;
+    }
+    match /classes/{code} {
+      allow get, list: if isTeacher() && resource.data.ownerId == request.auth.uid;
+      allow create: if isTeacher() && code.matches('^[A-F0-9]{8}$')
+        && request.resource.data.keys().hasOnly(['ownerId', 'createdAt'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+
+      match /students/{uid} {
+        allow get: if isStudent(uid) || ownsClass(code);
+        allow list: if ownsClass(code);
+        allow create: if isStudent(uid) && exists(/databases/$(database)/documents/classes/$(code))
+          && request.resource.data.keys().hasOnly(['sessionId', 'studentId', 'name', 'status', 'joinedAt'])
+          && request.resource.data.sessionId == code && request.resource.data.studentId == uid
+          && hasText(request.resource.data.name, 40)
+          && request.resource.data.status == 'playing' && request.resource.data.joinedAt == request.time;
+        allow update: if isStudent(uid) && resource.data.status == 'playing'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'submissionId', 'submittedAt', 'year', 'decisions', 'crisisHistory', 'finalReport', 'handover'
+          ])
+          && request.resource.data.status == 'submitted'
+          && request.resource.data.submissionId is string
+          && request.resource.data.submissionId.matches('^[0-9a-f-]{36}$')
+          && request.resource.data.submittedAt == request.time && request.resource.data.year == 2036
+          && request.resource.data.decisions is list && request.resource.data.decisions.size() == 5
+          && request.resource.data.crisisHistory is list && request.resource.data.crisisHistory.size() <= 2
+          && validReport(request.resource.data.finalReport) && validHandover(request.resource.data.handover);
+      }
+    }
+  }
+}

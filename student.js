@@ -1,13 +1,13 @@
 import { joinClass, onlineConfigured, savePlayer } from './backend.js';
-import { characters, choiceLabels, metrics } from './events.js';
+import { characters, choiceLabels } from './events.js';
 import { choose, eventFor, finalReport, policyTitle, startGame } from './game.js';
 import { portrait } from './portraits.js';
-import { deltas, escapeHtml, meters, renderReport, signed } from './ui.js';
+import { animateMeters, escapeHtml, meters, previewMeters, renderReport, signed } from './ui.js';
 
 const prefix = 're-education-v1:';
 const cleanCode = value => value.trim().toUpperCase();
-const key = code => prefix + (code || 'practice');
-const activeKey = prefix + 'active';
+const key = code => code ? 're-education-firebase-v1:class:' + code : prefix + 'practice';
+const activeKey = 're-education-firebase-v1:active';
 
 function load(storageKey) {
   try {
@@ -23,12 +23,11 @@ function store(storageKey, value) {
 
 function snapshot(state) {
   return {
-    status: state.phase === 'complete' ? 'submitted' : 'playing',
     year: state.year,
     decisions: state.decisions,
     crisisHistory: state.crisisHistory,
     finalReport: finalReport(state),
-    handover: state.phase === 'complete' ? state.handover : null,
+    handover: state.handover,
   };
 }
 
@@ -40,7 +39,6 @@ export function mountStudent(app) {
   if (entry && !entry.state) entry = null;
   let locked = false;
   let syncTask;
-  let syncAgain = false;
   let syncFailed = false;
   let storageFailed = false;
 
@@ -61,8 +59,8 @@ export function mountStudent(app) {
       : '수업 서버와 연결하지 못했습니다. 이 기기에 저장했으며 다시 전송할 수 있습니다.';
     if (storageFailed) return '브라우저 저장 공간을 사용할 수 없습니다. 새로고침하면 진행 내용이 사라질 수 있습니다.';
     if (!entry?.sessionId) return '연습 모드 · 이 기기에만 저장됩니다.';
-    if (entry.syncedRevision < entry.revision) return '수업 서버에 동기화 중입니다.';
-    return '수업 서버에 동기화했습니다.';
+    if (entry.pendingSubmission) return '인수인계서를 수업 서버에 전송 중입니다.';
+    return `수업 참여 모드 · ${entry.name}`;
   }
 
   function updateStatus() {
@@ -74,9 +72,11 @@ export function mountStudent(app) {
     if (confirmation && entry.state.phase === 'complete') {
       confirmation.textContent = !entry.sessionId
         ? (storageFailed ? '이 기기에 저장하지 못했습니다.' : '인수인계서가 이 기기에 저장되었습니다.')
-        : entry.syncedRevision >= entry.revision
+        : entry.submission === 'submitted'
           ? '인수인계서가 전달되었습니다. 지난 10년간의 교육정책을 되돌아보며 친구들과 서로 다른 미래 사회를 비교해 보세요.'
-          : '인수인계서는 수업 서버로 전송을 기다리고 있습니다.';
+          : entry.submission === 'duplicate'
+            ? '이 수업에 이미 제출한 인수인계서가 있어 기존 결과를 보관했습니다.'
+            : '인수인계서는 수업 서버로 전송을 기다리고 있습니다.';
     }
   }
 
@@ -85,52 +85,59 @@ export function mountStudent(app) {
   }
 
   function sync() {
-    if (!entry?.sessionId || entry.syncedRevision >= entry.revision) return;
-    if (syncTask) {
-      syncAgain = true;
-      return;
-    }
-    const sent = entry;
+    if (!entry?.pendingSubmission || syncTask) return;
+    const { code, sessionId, playerId, pendingSubmission: sent } = entry;
     syncFailed = false;
     updateStatus();
     syncTask = (async () => {
       try {
-        const accepted = await savePlayer(sent, snapshot(sent.state));
-        if (entry?.playerId !== sent.playerId) return;
-        if (!accepted) throw new Error('서버가 현재 버전을 확인하지 못했습니다.');
-        const saved = load(key(entry.code));
-        if (saved?.playerId === entry.playerId && saved.revision > entry.revision) {
+        const submission = await savePlayer({ sessionId, playerId, runId: sent.runId }, sent.payload);
+        const saved = load(key(code));
+        if (saved?.revision > entry.revision && saved.playerId === playerId) {
           entry = saved;
-          syncAgain = true;
           render();
         }
-        persist({ ...entry, syncedRevision: Math.max(entry.syncedRevision, sent.revision) });
+        if (entry.pendingSubmission?.runId === sent.runId) {
+          persist({ ...entry, pendingSubmission: null, submission: entry.runId === sent.runId ? submission : 'duplicate' });
+        }
       } catch {
-        if (entry?.playerId === sent.playerId) syncFailed = true;
+        syncFailed = entry.pendingSubmission?.runId === sent.runId;
       } finally {
         syncTask = null;
         updateStatus();
-        const again = syncAgain;
-        syncAgain = false;
-        if (again) sync();
       }
     })();
   }
 
   function commit(state, focus) {
+    const previousStats = entry.state.stats;
     const saved = load(key(entry.code));
-    if (saved?.playerId === entry.playerId && saved.revision > entry.revision) {
+    if (saved?.revision > entry.revision && saved.playerId === entry.playerId) {
       entry = saved;
     } else {
-      persist({ ...entry, state, revision: entry.revision + 1 });
+      const pendingSubmission = entry.sessionId && state.phase === 'complete' && !entry.submission
+        ? (entry.pendingSubmission ?? { runId: entry.runId, payload: snapshot(state) })
+        : entry.pendingSubmission;
+      persist({ ...entry, state, pendingSubmission, revision: entry.revision + 1 });
     }
-    render(focus);
+    render(focus, previousStats);
     sync();
   }
 
   function newEntry(code = '', name = '') {
-    return { code, name, playerId: code ? crypto.randomUUID() : null, token: code ? crypto.randomUUID() : null,
-      sessionId: null, revision: 0, syncedRevision: 0, state: startGame() };
+    return { code, name, playerId: null, sessionId: null, revision: 0, state: startGame() };
+  }
+
+  function restart() {
+    if (!confirm('2026년 첫 정책부터 다시 시작할까요? 이미 제출한 결과는 수업에 보관됩니다.')) return;
+    const reset = startGame();
+    const saved = load(key(entry.code));
+    if (saved?.revision > entry.revision && saved.playerId === entry.playerId) entry = saved;
+    persist({ ...entry, state: reset, submission: entry.submission ? 'duplicate' : null, runId: entry.sessionId ? crypto.randomUUID() : undefined,
+      revision: entry.revision + 1 });
+    locked = false;
+    render(true);
+    sync();
   }
 
   function resumeAt(next) {
@@ -182,20 +189,13 @@ export function mountStudent(app) {
       }
       submit.disabled = practice.disabled = true;
       info.textContent = '수업에 연결하는 중입니다.';
-      let candidate = load(key(code));
-      if (candidate?.sessionId && candidate.name === name) {
-        resumeAt(candidate);
-        return;
-      }
-      const pendingKey = prefix + 'join:' + code;
-      const pending = load(pendingKey);
       try {
-        candidate = pending?.name === name ? pending : newEntry(code, name);
-        try { store(pendingKey, candidate); } catch { /* Play remains available without storage. */ }
-        const sessionId = await joinClass(code, name, candidate.playerId, candidate.token);
-        resumeAt({ ...candidate, sessionId });
+        const participant = await joinClass(code, name);
+        const saved = load(key(code));
+        const candidate = saved?.playerId === participant.playerId ? saved : newEntry(code, name);
+        resumeAt({ ...candidate, ...participant, runId: candidate.runId ?? crypto.randomUUID() });
       } catch (error) {
-        info.textContent = error.message === '유효한 수업 참여 코드를 입력해 주세요.'
+        info.textContent = error.message === '수업 참여 코드를 확인해 주세요.'
           ? error.message : '수업에 연결하지 못했습니다. 다시 시도하거나 이 기기에서 연습할 수 있습니다.';
         submit.disabled = practice.disabled = false;
       }
@@ -225,17 +225,31 @@ export function mountStudent(app) {
         <div class="quote">${event.dialogue}</div>
         <div class="preview" id="preview" aria-hidden="true"></div>
       </div>
-      <div class="choices">${Object.entries(event.choices).map(([choice, option], i) => `
+      <div class="choices">${Object.keys(event.choices).map((choice, i) => `
         <button type="button" class="choice" id="${choice}"><span class="choice-direction" aria-hidden="true">${i ? '→' : '←'}</span>
           <span class="choice-label">${emergency ? (i ? '오른쪽 대응' : '왼쪽 대응') : choiceLabels[choice]}</span>
-          <strong class="policy-title">${policyTitle(state, event.id, choice)}</strong>${deltas(option.effects)}</button>`).join('')}</div>
+          <strong class="policy-title">${policyTitle(state, event.id, choice)}</strong></button>`).join('')}</div>
       <p class="hint controls-hint">카드를 좌우로 밀거나 버튼을 누르세요. 사회혼란은 낮을수록 좋습니다.</p>${storageStatus()}`;
 
     const card = app.querySelector('#swipe');
     const preview = app.querySelector('#preview');
     const left = app.querySelector('#reject');
     const right = app.querySelector('#accept');
+    const meterGroup = app.querySelector('.meters');
     let drag;
+
+    const showEstimate = (choice, opacity = 1) =>
+      previewMeters(meterGroup, state.stats, event.choices[choice]?.effects, opacity);
+
+    for (const [button, choice] of [[left, 'reject'], [right, 'accept']]) {
+      const show = () => { if (!locked && !drag) showEstimate(choice); };
+      const clear = () => { if (!drag) showEstimate(); };
+      button.onpointerenter = event => { if (event.pointerType === 'mouse') show(); };
+      button.onpointerleave = clear;
+      button.onfocus = () => { if (button.matches(':focus-visible')) show(); };
+      button.onblur = clear;
+    }
+
 
     function clearDrag() {
       drag = null;
@@ -243,6 +257,7 @@ export function mountStudent(app) {
       preview.style.opacity = '';
       left.classList.remove('choice-active');
       right.classList.remove('choice-active');
+      showEstimate();
     }
 
     function select(choice) {
@@ -251,8 +266,8 @@ export function mountStudent(app) {
       left.disabled = right.disabled = true;
       clearDrag();
       const complete = () => {
-        locked = false;
         if (entry?.state !== state) return;
+        locked = false;
         commit(choose(state, event.id, choice), true);
       };
       const transitionMs = 240;
@@ -289,8 +304,9 @@ export function mountStudent(app) {
       const title = policyTitle(state, state.currentEvent, choice);
       if (preview.dataset.choice !== choice) {
         preview.dataset.choice = choice;
-        preview.innerHTML = `<strong>${escapeHtml(title)}</strong>${deltas(eventFor(state).choices[choice].effects)}`;
+        preview.textContent = title;
       }
+      showEstimate(Math.abs(dx) > 12 ? choice : undefined, opacity);
       left.classList.toggle('choice-active', dx < -12);
       right.classList.toggle('choice-active', dx > 12);
     };
@@ -322,6 +338,12 @@ export function mountStudent(app) {
     </article>${storageStatus()}`;
     const form = app.querySelector('#handover-form');
     form.oninput = () => {
+      const saved = load(key(entry.code));
+      if (saved?.revision > entry.revision && saved.playerId === entry.playerId) {
+        entry = saved;
+        render();
+        return;
+      }
       const data = new FormData(form);
       persist({ ...entry, state: { ...state, handover: {
         education: data.get('education'), reason: data.get('reason'),
@@ -341,8 +363,9 @@ export function mountStudent(app) {
     };
   }
 
-  function render(focus = false) {
+  function render(focus = false, previousStats) {
     const state = entry?.state;
+    restartButton.hidden = !state;
     if (!state) {
       renderIntro();
       return;
@@ -359,15 +382,9 @@ export function mountStudent(app) {
         <h2 tabindex="-1">인수인계서</h2><p id="confirmation" role="status"></p>
         <details><summary>최종 사회 보고서 다시 보기</summary>${renderReport(finalReport(state))}</details>
       </article>${storageStatus()}
-      ${entry.sessionId ? '' : '<button id="restart" class="full">2026년부터 다시 연습하기</button>'}
       ${onlineConfigured ? '<a class="back-to-start" href="?join=1">수업 참여 화면으로 돌아가기</a>' : ''}`;
-      const restart = app.querySelector('#restart');
-      if (restart) restart.onclick = () => {
-        persist(newEntry());
-        render(true);
-      };
-
     }
+    if (previousStats) animateMeters(app.querySelector('.meters'), previousStats, state.stats);
     const retry = app.querySelector('#retry-sync');
     if (retry) retry.onclick = sync;
     updateStatus();
@@ -377,6 +394,8 @@ export function mountStudent(app) {
     }
   }
 
+  const restartButton = document.querySelector('#restart');
+  restartButton.onclick = restart;
   addEventListener('online', sync);
   render();
   sync();

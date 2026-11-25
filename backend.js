@@ -1,60 +1,142 @@
-import { supabasePublishableKey, supabaseUrl } from './config.js';
+import { firebaseConfig } from './config.js';
 
-export const onlineConfigured = Boolean(supabaseUrl && supabasePublishableKey);
-let clientPromise;
+export const onlineConfigured = Boolean(firebaseConfig?.apiKey && firebaseConfig?.projectId && firebaseConfig?.appId);
+const sdkUrl = 'https://www.gstatic.com/firebasejs/12.5.0/';
+const clients = new Map();
+let sdk;
 
-async function client() {
-  if (!onlineConfigured) throw new Error('수업 데이터베이스 연결이 설정되지 않았습니다.');
-  clientPromise ??= import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/+esm')
-    .then(({ createClient }) => createClient(supabaseUrl, supabasePublishableKey))
-    .catch(error => {
-      clientPromise = undefined;
+function withTimeout(promise) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('수업 서버 응답을 기다리는 중 시간이 초과됐습니다.')), 10000);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function client(role) {
+  if (!onlineConfigured) throw new Error('Firebase 연결이 설정되지 않았습니다.');
+  sdk ??= Promise.all([
+    import(sdkUrl + 'firebase-app.js'),
+    import(sdkUrl + 'firebase-auth.js'),
+    import(sdkUrl + 'firebase-firestore.js'),
+  ]).catch(error => { sdk = undefined; throw error; });
+  const [appApi, authApi, db] = await sdk;
+  if (!clients.has(role)) {
+    const app = appApi.initializeApp(firebaseConfig, role);
+    clients.set(role, { auth: authApi.getAuth(app), authApi, db, firestore: db.getFirestore(app) });
+  }
+  const connection = clients.get(role);
+  await connection.auth.authStateReady();
+  return connection;
+}
+
+let studentSignIn;
+async function studentClient() {
+  const connection = await client('student');
+  if (!connection.auth.currentUser) {
+    studentSignIn ??= connection.authApi.signInAnonymously(connection.auth).finally(() => { studentSignIn = undefined; });
+    await studentSignIn;
+  }
+  if (!connection.auth.currentUser.isAnonymous) throw new Error('학생 인증 정보를 확인할 수 없습니다.');
+  return connection;
+}
+
+export function joinClass(code, name) {
+  return withTimeout((async () => {
+    const { auth, db, firestore } = await studentClient();
+    const studentId = auth.currentUser.uid;
+    const ref = db.doc(firestore, 'classes', code, 'students', studentId);
+    try {
+      return await db.runTransaction(firestore, async transaction => {
+        const existing = await transaction.get(ref);
+        if (existing.exists()) {
+          return { sessionId: code, playerId: studentId, name: existing.data().name };
+        }
+        transaction.set(ref, { sessionId: code, studentId, name, status: 'playing', joinedAt: db.serverTimestamp() });
+        return { sessionId: code, playerId: studentId, name };
+      });
+    } catch (error) {
+      if (error.code === 'permission-denied') throw new Error('수업 참여 코드를 확인해 주세요.');
       throw error;
+    }
+  })());
+}
+
+export function savePlayer(entry, payload) {
+  return withTimeout((async () => {
+    const { auth, db, firestore } = await studentClient();
+    if (auth.currentUser.uid !== entry.playerId) throw new Error('이 게임을 시작한 브라우저의 학생 인증이 필요합니다.');
+    const ref = db.doc(firestore, 'classes', entry.sessionId, 'students', entry.playerId);
+    return db.runTransaction(firestore, async transaction => {
+      const current = await transaction.get(ref);
+      if (!current.exists()) throw new Error('수업 참여 기록을 찾을 수 없습니다.');
+      if (current.data().status === 'submitted') {
+        return current.data().submissionId === entry.runId ? 'submitted' : 'duplicate';
+      }
+      transaction.update(ref, { ...payload, status: 'submitted', submissionId: entry.runId, submittedAt: db.serverTimestamp() });
+      return 'submitted';
     });
-  return clientPromise;
+  })());
 }
 
-async function rpc(name, args) {
-  const { data, error } = await (await client()).rpc(name, args);
-  if (error) throw error;
-  return data;
+function requireTeacherRole(user) {
+  if (!user || user.isAnonymous) throw new Error('교사 계정으로 로그인해 주세요.');
+  return user;
 }
-
-export const joinClass = (code, name, id, token) => rpc('join_class', {
-  p_code: code, p_name: name, p_player: id, p_token: token,
-});
-
-export const savePlayer = (entry, payload) => rpc('save_player', {
-  p_session: entry.sessionId, p_player: entry.playerId, p_token: entry.token,
-  p_revision: entry.revision, p_payload: payload,
-});
-
-export const createClass = () => rpc('create_class');
-export const myClasses = () => rpc('list_classes');
-export const classPlayers = sessionId => rpc('list_players', { p_session: sessionId });
 
 export async function teacherSession() {
-  const { data, error } = await (await client()).auth.getSession();
-  if (error) throw error;
-  return data.session;
+  const { auth } = await client('teacher');
+  return auth.currentUser && !auth.currentUser.isAnonymous ? auth.currentUser : null;
 }
 
 export async function teacherSignIn(email, password) {
-  const { error } = await (await client()).auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  const { auth, authApi, db, firestore } = await client('teacher');
+  const result = await authApi.signInWithEmailAndPassword(auth, email, password);
+  const grant = await db.getDocFromServer(db.doc(firestore, 'teachers', result.user.uid));
+  if (!grant.exists()) throw new Error('교사 계정으로 등록된 사용자가 아닙니다.');
 }
 
 export async function teacherSignOut() {
-  const { error } = await (await client()).auth.signOut({ scope: 'local' });
-  if (error) throw error;
+  const { auth, authApi } = await client('teacher');
+  await authApi.signOut(auth);
 }
 
-export async function watchClass(sessionId, onChange, onStatus) {
-  const api = await client();
-  const channel = api.channel(`class:${sessionId}`)
-    .on('postgres_changes', {
-      event: 'UPDATE', schema: 'public', table: 're_classes', filter: `id=eq.${sessionId}`,
-    }, onChange)
-    .subscribe(onStatus);
-  return () => api.removeChannel(channel);
+export async function myClasses() {
+  const { auth, db, firestore } = await client('teacher');
+  const ownerId = requireTeacherRole(auth.currentUser).uid;
+  const grant = await db.getDocFromServer(db.doc(firestore, 'teachers', ownerId));
+  if (!grant.exists()) throw new Error('교사 계정으로 등록된 사용자가 아닙니다.');
+  const owned = db.query(db.collection(firestore, 'classes'), db.where('ownerId', '==', ownerId));
+  const snapshot = await db.getDocsFromServer(owned);
+  return snapshot.docs.map(item => ({ id: item.id, code: item.id, createdAt: item.data().createdAt.toMillis() }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function createClass() {
+  const { auth, db, firestore } = await client('teacher');
+  const ownerId = requireTeacherRole(auth.currentUser).uid;
+  // The class document ID doubles as the code. Creation-only rules prevent collisions from overwriting a class.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const random = crypto.getRandomValues(new Uint8Array(4));
+    const code = Array.from(random, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+    try {
+      await withTimeout(db.setDoc(db.doc(firestore, 'classes', code), { ownerId, createdAt: db.serverTimestamp() }));
+      return { id: code, code, createdAt: Date.now() };
+    } catch (error) {
+      if (error.code !== 'permission-denied' || attempt === 3) throw error;
+    }
+  }
+}
+
+export async function watchClass(sessionId, onChange, onError) {
+  const { auth, db, firestore } = await client('teacher');
+  requireTeacherRole(auth.currentUser);
+  const students = db.collection(firestore, 'classes', sessionId, 'students');
+  return db.onSnapshot(students, { includeMetadataChanges: true }, snapshot => {
+    const players = snapshot.docs.map(item => {
+      const { name, ...payload } = item.data();
+      return { id: item.id, name, payload };
+    });
+    onChange(players, snapshot.metadata.fromCache);
+  }, onError);
 }

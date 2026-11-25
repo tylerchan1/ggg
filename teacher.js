@@ -1,13 +1,10 @@
 import {
-  classPlayers, createClass, myClasses, onlineConfigured, teacherSession, teacherSignIn,
+  createClass, myClasses, onlineConfigured, teacherSession, teacherSignIn,
   teacherSignOut, watchClass,
 } from './backend.js';
 import { classResults, validatePlayers } from './class-results.js';
-import { escapeHtml, newsList, renderTimeline, meters } from './ui.js';
+import { escapeHtml, renderReport, meters } from './ui.js';
 
-const statusLabel = payload => payload?.status === 'submitted' ? '제출 완료'
-  : payload?.status === 'invalid' ? '기록 확인 필요'
-  : payload?.finalReport ? '인수인계서 작성 중' : `${Number.isInteger(payload?.year) ? payload.year : 2026}년 · 진행 중`;
 const percent = value => Math.round(value * 100);
 
 function choiceChart(row) {
@@ -25,20 +22,21 @@ function countChart(rows, denominator) {
     <div class="count-bar" aria-hidden="true"><i style="width:${maximum ? row.count * 100 / maximum : 0}%"></i></div></li>`).join('')}</ul>`;
 }
 
-function detail(player) {
-  const data = player.payload ?? {};
-  const report = data.finalReport;
-  const timeline = items => items?.length ? renderTimeline(items) : '<p>기록 없음</p>';
-  return `<article class="report student-detail">
-    <h3>${escapeHtml(player.name)}</h3><p>${statusLabel(data)}</p>
-    <h4>정규 정책 선택 기록</h4>${timeline(data.decisions)}
-    <h4>긴급 위기 대응 기록</h4>${timeline(data.crisisHistory)}
-    <h4>최종 관리 지표</h4>${report ? meters(report.stats) : '<p>게임 완료 후 표시됩니다.</p>'}
-    <h4>최종 가상 미래 뉴스</h4>${report ? `<ul class="report-list">${newsList(report.news)}</ul>` : '<p>게임 완료 후 표시됩니다.</p>'}
-    <h4>인수인계서</h4>${data.status === 'submitted' && data.handover ? `
-      <dl><dt>앞으로 강화해야 할 교육</dt><dd>${escapeHtml(data.handover.education)}</dd>
-      <dt>그렇게 생각하는 이유</dt><dd>${escapeHtml(data.handover.reason)}</dd></dl>` : '<p>제출을 기다리고 있습니다.</p>'}
-  </article>`;
+function handover(player) {
+  const { education, reason } = player.payload.handover;
+  return `<dl class="student-answers">
+    <dt>강화할 교육</dt><dd>${escapeHtml(education)}</dd>
+    <dt>그 이유</dt><dd>${escapeHtml(reason)}</dd>
+  </dl>`;
+}
+
+function card(player) {
+  return `<li><article class="response-card">
+    <h3><button type="button" class="card-open" data-player="${escapeHtml(player.id)}">
+      ${escapeHtml(player.name)} <span class="sr-only">상세 기록 열기</span></button></h3>
+    ${handover(player)}
+    ${meters(player.payload.finalReport.stats)}
+  </article></li>`;
 }
 
 export async function mountTeacher(app) {
@@ -50,80 +48,50 @@ export async function mountTeacher(app) {
   }
 
   let stopWatching;
-  let timer;
   let generation = 0;
-  let requestRunning = false;
-  let pending = false;
-  let selectedSession;
-  let selectedPlayer;
-  let players = [];
 
   function cleanWatch() {
     generation++;
     stopWatching?.();
     stopWatching = undefined;
-    clearInterval(timer);
   }
 
-  function results() {
-    const root = app.querySelector('#class-results');
+  function renderResults(incoming) {
+    const players = validatePlayers(incoming);
     const current = classResults(players);
-    root.innerHTML = `<div class="class-totals">
-      <span><strong>${players.length}</strong> 참여</span>
-      <span><strong>${current.playing}</strong> 진행 중</span>
-      <span><strong>${current.submitted}</strong> 제출 완료</span>
-    </div>
-    <div class="chart-grid">
+    const submitted = players.filter(player => player.payload.status === 'submitted');
+    const byId = new Map(submitted.map(player => [player.id, player]));
+    const root = app.querySelector('#class-results');
+    const focused = document.activeElement?.dataset.player;
+    const [total, playing, done] = app.querySelectorAll('.class-totals strong');
+    total.textContent = players.length;
+    playing.textContent = current.playing;
+    done.textContent = submitted.length;
+    const board = root.querySelector('#submissions');
+    const initial = board.firstChild === null;
+    const existing = new Set(Array.from(board.querySelectorAll('[data-player]'), button => button.dataset.player));
+    if (initial || submitted.length !== existing.size || submitted.some(player => !existing.has(player.id))) {
+      board.innerHTML = submitted.length ? submitted.map(card).join('') : '<li class="board-empty">제출된 인수인계서가 아직 없습니다.</li>';
+      Array.from(board.querySelectorAll('[data-player]')).find(button => button.dataset.player === focused)
+        ?.focus({ preventScroll: true });
+    }
+    const charts = root.querySelector('#class-charts');
+    charts.innerHTML = `<div class="chart-grid">
       <section class="panel"><h3>사건별 선택 비율</h3><ul class="chart-list">${current.choices.map(choiceChart).join('')}</ul></section>
       <section class="panel"><h3>마지막 사건의 등장인물</h3>${countChart(current.finals)}
         <h3>최종 사회혼란 분포 <small>${current.finished}명</small></h3>${countChart(current.bands, current.finished)}
         <h3>긴급 위기 발생 횟수</h3>${countChart(current.crises)}</section>
-    </div>
-    <section class="panel"><h3>학생별 결과</h3>
-      ${players.length ? `<ul class="student-list">${players.map(player => `
-        <li><button type="button" data-player="${escapeHtml(player.id)}" aria-pressed="${selectedPlayer === player.id}">
-          <span>${escapeHtml(player.name)}</span><span>${statusLabel(player.payload)}</span></button></li>`).join('')}</ul>`
-      : '<p>아직 참여한 학생이 없습니다.</p>'}
-      <div id="student-detail"></div></section>`;
-    const buttons = root.querySelectorAll('[data-player]');
-    const displayDetails = () => {
-      const player = players.find(item => item.id === selectedPlayer);
-      root.querySelector('#student-detail').innerHTML = player ? detail(player) : '';
-      for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.player === selectedPlayer));
-    };
-    for (const button of buttons) button.onclick = () => {
-      selectedPlayer = button.dataset.player;
-      displayDetails();
-      root.querySelector('#student-detail').scrollIntoView({ block: 'nearest' });
-    };
-    displayDetails();
-  }
+    </div>`;
 
-  async function refresh(version, sessionId) {
-    if (version !== generation) return;
-    if (requestRunning) {
-      pending = true;
-      return;
-    }
-    requestRunning = true;
-    const status = app.querySelector('#class-status');
-    try {
-      const incoming = validatePlayers(await classPlayers(sessionId));
-      if (version !== generation) return;
-      if (JSON.stringify(incoming) !== JSON.stringify(players) || !app.querySelector('.class-totals')) {
-        players = incoming;
-        results();
-      }
-      status.textContent = '학생 데이터 최신 상태';
-    } catch {
-      if (version === generation) status.textContent = '학생 데이터를 불러오지 못했습니다. 자동으로 다시 시도합니다.';
-    } finally {
-      requestRunning = false;
-      if (pending) {
-        pending = false;
-        if (selectedSession) refresh(generation, selectedSession.id);
-      }
-    }
+    board.onclick = event => {
+      const button = event.target.closest('[data-player]');
+      const player = byId.get(button?.dataset.player);
+      if (!player) return;
+      const dialog = root.querySelector('#student-detail');
+      dialog.querySelector('h3').textContent = player.name;
+      dialog.querySelector('.detail-content').innerHTML = `${handover(player)}${renderReport(player.payload.finalReport, true)}`;
+      dialog.showModal();
+    };
   }
 
   function studentUrl(code) {
@@ -150,17 +118,25 @@ export async function mountTeacher(app) {
   function openSession(session) {
     cleanWatch();
     const version = generation;
-    selectedSession = session;
-    selectedPlayer = null;
-    players = [];
     const url = studentUrl(session.code);
     app.querySelector('#class-view').innerHTML = `<section class="panel class-share">
       <div><h3>학생 접속</h3><p>수업 참여 코드 <strong class="join-code">${escapeHtml(session.code)}</strong></p>
         <label for="join-url">학생 접속 주소</label><div class="copy-row"><input id="join-url" readonly value="${escapeHtml(url)}">
         <button type="button" id="copy-url">복사</button></div><p id="copy-status" class="form-status" role="status"></p></div>
-      <div id="join-qr" class="join-qr"></div></section>
+      <div id="join-qr" class="join-qr"></div>
+      <div class="class-totals" aria-label="수업 참여 현황">
+        <span><strong>–</strong> 참여</span><span><strong>–</strong> 진행 중</span><span><strong>–</strong> 제출 완료</span>
+      </div></section>
       <p id="class-status" class="hint" role="status">학생 데이터를 불러오는 중입니다.</p>
-      <div id="class-results"></div>`;
+      <div id="class-results">
+        <h3>학생 인수인계서</h3><ul id="submissions" class="submission-board"></ul>
+        <details class="panel board-stats"><summary>수업 통계</summary><div id="class-charts"></div></details>
+        <dialog id="student-detail" aria-labelledby="detail-title">
+          <div class="detail-heading"><h3 id="detail-title"></h3>
+          <form method="dialog"><button type="submit" aria-label="상세 기록 닫기">닫기</button></form></div>
+          <div class="detail-content"></div>
+        </dialog>
+      </div>`;
     app.querySelector('#copy-url').onclick = async () => {
       const input = app.querySelector('#join-url');
       const status = app.querySelector('#copy-status');
@@ -174,15 +150,23 @@ export async function mountTeacher(app) {
       }
     };
     showQr(url, version);
-    const update = () => refresh(version, session.id);
-    update();
-    timer = setInterval(update, 5000);
-    watchClass(session.id, update, status => {
-      if (status === 'SUBSCRIBED') update();
-    }).then(stop => {
+    const status = app.querySelector('#class-status');
+    const failed = () => {
+      if (version !== generation) return;
+      status.textContent = '학생 데이터를 불러오지 못했습니다. 연결을 확인하고 다시 시도해 주세요.';
+      const retry = document.createElement('button');
+      retry.textContent = '다시 연결';
+      retry.onclick = () => openSession(session);
+      status.append(' ', retry);
+    };
+    watchClass(session.id, (players, cached) => {
+      if (version !== generation) return;
+      renderResults(players);
+      status.textContent = cached ? '수업 서버에 연결 중입니다.' : '제출 내용이 실시간으로 표시됩니다.';
+    }, failed).then(stop => {
       if (version === generation) stopWatching = stop;
       else stop();
-    }).catch(() => { /* Periodic refresh still checks the database. */ });
+    }).catch(failed);
   }
 
   async function showDashboard() {
@@ -227,7 +211,6 @@ export async function mountTeacher(app) {
       try {
         await teacherSignOut();
         cleanWatch();
-        selectedSession = null;
         renderLogin();
       } catch {
         status.textContent = '로그아웃하지 못했습니다. 다시 시도해 주세요.';

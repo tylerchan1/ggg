@@ -6,10 +6,11 @@
     "test": "node --test tests/*.test.js",
     "test:game": "node --test tests/game.test.js",
     "test:browser": "node --test tests/browser.test.js",
-    "test:database": "node --test tests/database.test.js"
+    "test:rules": "node --test tests/firestore.test.js"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.6.0",
+    "@firebase/rules-unit-testing": "5.0.0",
+    "firebase": "12.5.0",
     "playwright-core": "1.65.1",
     "qrcode-generator": "2.0.4"
   }
