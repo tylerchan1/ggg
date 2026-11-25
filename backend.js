@@ -62,21 +62,61 @@ export function joinClass(code, name) {
   })());
 }
 
+export async function studentIdentity() {
+  const { auth } = await withTimeout(client('student'));
+  return auth.currentUser?.isAnonymous ? auth.currentUser.uid : null;
+}
+
+export async function switchStudent() {
+  const { auth, authApi } = await withTimeout(client('student'));
+  await authApi.signOut(auth);
+}
+
+function publicAnswer(name, handover, submittedAt) {
+  return { name, education: handover.education, reason: handover.reason, submittedAt };
+}
+
 export function savePlayer(entry, payload) {
   return withTimeout((async () => {
     const { auth, db, firestore } = await studentClient();
     if (auth.currentUser.uid !== entry.playerId) throw new Error('이 게임을 시작한 브라우저의 학생 인증이 필요합니다.');
     const ref = db.doc(firestore, 'classes', entry.sessionId, 'students', entry.playerId);
+    const answer = db.doc(firestore, 'classes', entry.sessionId, 'answers', entry.playerId);
     return db.runTransaction(firestore, async transaction => {
       const current = await transaction.get(ref);
       if (!current.exists()) throw new Error('수업 참여 기록을 찾을 수 없습니다.');
-      if (current.data().status === 'submitted') {
-        return current.data().submissionId === entry.runId ? 'submitted' : 'duplicate';
+      const student = current.data();
+      if (student.status === 'submitted') {
+        return student.submissionId === entry.runId ? 'submitted' : 'duplicate';
       }
-      transaction.update(ref, { ...payload, status: 'submitted', submissionId: entry.runId, submittedAt: db.serverTimestamp() });
+      const submittedAt = db.serverTimestamp();
+      transaction.update(ref, { ...payload, status: 'submitted', submissionId: entry.runId, submittedAt });
+      transaction.set(answer, publicAnswer(student.name, payload.handover, submittedAt));
       return 'submitted';
     });
   })());
+}
+
+export async function watchAnswers(entry, onChange, onError) {
+  const { auth, db, firestore } = await withTimeout(client('student'));
+  if (auth.currentUser?.uid !== entry.playerId) throw new Error('학생 인증을 다시 확인해 주세요.');
+  const answer = db.doc(firestore, 'classes', entry.sessionId, 'answers', entry.playerId);
+  const student = db.doc(firestore, 'classes', entry.sessionId, 'students', entry.playerId);
+  // Students who submitted before the public collection existed can publish their original answer once.
+  await withTimeout(db.runTransaction(firestore, async transaction => {
+    const own = await transaction.get(student);
+    if (own.data()?.status !== 'submitted') throw new Error('먼저 인수인계서를 제출해 주세요.');
+    if (!(await transaction.get(answer)).exists()) {
+      const { name, handover, submittedAt } = own.data();
+      transaction.set(answer, publicAnswer(name, handover, submittedAt));
+    }
+  }));
+  const answers = db.collection(firestore, 'classes', entry.sessionId, 'answers');
+  return db.onSnapshot(answers, { includeMetadataChanges: true }, snapshot => {
+    if (auth.currentUser?.uid !== entry.playerId) return onError();
+    if (snapshot.metadata.fromCache) return;
+    onChange(snapshot.docs.map(item => ({ ...item.data(), id: item.id })));
+  }, onError);
 }
 
 function requireTeacherRole(user) {

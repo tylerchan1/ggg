@@ -1,4 +1,5 @@
 import { metrics } from './events.js';
+import { illustration, storyTopic, topicLabel } from './visuals.js';
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
@@ -66,6 +67,7 @@ export function renderTimeline(timeline) {
 
 export function renderReport(report, expandTimeline = false) {
   const list = items => `<ul class="report-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+  if (!expandTimeline) return renderEpilogue(report, list);
   return `<article class="report">
     <div class="mini">2036년 · 가상 미래신문 특별호</div>
     <h2 id="report-title" tabindex="-1">최종 사회 보고서</h2>
@@ -76,5 +78,39 @@ export function renderReport(report, expandTimeline = false) {
     <section><h3>주요 교육 성과</h3>${list(report.achievements)}</section>
     <section><h3>남겨진 사회문제</h3>${list(report.issues)}</section>
     <details ${expandTimeline ? 'open' : ''}><summary>정책 결정 기록</summary>${renderTimeline(report.timeline)}</details>
+  </article>`;
+}
+
+
+function renderEpilogue(report, list) {
+  const finale = report.news.at(-1);
+  const lead = report.news.find(story => story.year === 2036 && story.socialChaos < 0) ?? finale;
+  const challenge = [...report.news].sort((a, b) => b.socialChaos - a.socialChaos)[0];
+  const remainingAchievements = report.achievements.filter(text => text !== lead.achievement && text !== finale.achievement);
+  const remainingIssues = report.issues.filter(text => text !== challenge.issue);
+  return `<article class="epilogue">
+    <header class="epilogue-hero">
+      ${illustration(storyTopic(finale))}
+      <div><p class="mini">2036년 · 교육감 임기 종료</p>
+      <h2 id="report-title" tabindex="-1">2036년, 당신이 만들어낸 미래</h2>
+      <p>${escapeHtml(finale.detail)}</p></div>
+    </header>
+    <section class="epilogue-section">
+      <h3>우리가 이루어낸 변화</h3>
+      <div class="epilogue-feature">${illustration(storyTopic(lead))}
+        <div><h4>${topicLabel(storyTopic(lead))}</h4><p>${escapeHtml(lead.achievement)}</p></div></div>
+      ${remainingAchievements.length ? list(remainingAchievements) : ''}
+    </section>
+    <section class="epilogue-section">
+      <h3>아직 남겨진 과제</h3>
+      <div class="epilogue-feature">${illustration(storyTopic(challenge, true))}
+        <div><h4>${topicLabel(storyTopic(challenge, true))}</h4><p>${escapeHtml(challenge.issue)}</p></div></div>
+      ${remainingIssues.length ? list(remainingIssues) : ''}
+      ${report.unresolved.length ? `<p class="epilogue-unresolved"><strong>미해결 위기</strong> · ${report.unresolved.map(item =>
+        `${escapeHtml(item.title)} (${item.value})`).join(', ')}</p>` : ''}
+    </section>
+    <section class="epilogue-section compact-metrics"><h3>교육청 운영 현황</h3>${meters(report.stats)}</section>
+    <details class="epilogue-details"><summary>정책 결정 기록</summary>${renderTimeline(report.timeline)}</details>
+    <details class="epilogue-details"><summary>가상 미래 뉴스 모아 보기</summary><ul class="report-list">${newsList(report.news)}</ul></details>
   </article>`;
 }

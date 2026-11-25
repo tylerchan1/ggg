@@ -73,7 +73,7 @@ function advance(state) {
     const newsId = events[decision.eventId].choices[decision.choice].newsId;
     const story = news[newsId];
     if (story.year !== state.year || state.appliedNews.some(item => item.id === newsId)) continue;
-    state.appliedNews.push({ id: newsId, ...resolveStory(state, newsId, decision) });
+    state.appliedNews.push({ id: newsId, ...resolveStory(state, newsId, decision), socialChaosBefore: state.stats[3] });
     applyEffects(state, [0, 0, 0, story.socialChaos]);
     if (showCrisis(state)) return;
   }

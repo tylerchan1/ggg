@@ -92,6 +92,7 @@ function enumerate(state = startGame()) {
     if (!state.additionalBudgetGranted && next.additionalBudgetGranted) nextStats[0] = Math.min(100, nextStats[0] + 10);
     for (const story of next.appliedNews.slice(state.appliedNews.length)) {
       assert.equal(story.year, next.year);
+      assert.equal(story.socialChaosBefore, nextStats[3]);
       nextStats[3] = Math.max(0, nextStats[3] + story.socialChaos);
     }
     assert.deepEqual(next.stats, nextStats);

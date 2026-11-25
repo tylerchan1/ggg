@@ -16,6 +16,10 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid
         && request.auth.token.firebase.sign_in_provider == 'anonymous';
     }
+    function hasSubmitted(code) {
+      return request.auth != null && isStudent(request.auth.uid)
+        && get(/databases/$(database)/documents/classes/$(code)/students/$(request.auth.uid)).data.status == 'submitted';
+    }
     function hasText(value, maximum) {
       return value is string && value.size() > 0 && value.size() <= maximum;
     }
@@ -64,7 +68,21 @@ service cloud.firestore {
           && request.resource.data.submittedAt == request.time && request.resource.data.year == 2036
           && request.resource.data.decisions is list && request.resource.data.decisions.size() == 5
           && request.resource.data.crisisHistory is list && request.resource.data.crisisHistory.size() <= 2
-          && validReport(request.resource.data.finalReport) && validHandover(request.resource.data.handover);
+          && validReport(request.resource.data.finalReport) && validHandover(request.resource.data.handover)
+          && existsAfter(/databases/$(database)/documents/classes/$(code)/answers/$(uid));
+      }
+
+      match /answers/{uid} {
+        function matchesSubmittedAnswer() {
+          let student = getAfter(/databases/$(database)/documents/classes/$(code)/students/$(uid)).data;
+          let answer = request.resource.data;
+          return student.status == 'submitted'
+            && answer.keys().hasOnly(['name', 'education', 'reason', 'submittedAt'])
+            && answer.name == student.name && answer.education == student.handover.education
+            && answer.reason == student.handover.reason && answer.submittedAt == student.submittedAt;
+        }
+        allow get, list: if hasSubmitted(code);
+        allow create: if isStudent(uid) && matchesSubmittedAnswer();
       }
     }
   }
