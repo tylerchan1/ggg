@@ -157,6 +157,13 @@ async function finish(page) {
     }
   }
   await page.getByRole('heading', { name: '2036년, 당신이 만들어낸 미래' }).waitFor();
+  await page.locator('.epilogue-hero h3').waitFor();
+  await page.getByText('마지막 정책의 결과').waitFor();
+  const articles = page.getByText('가상 미래 뉴스 모아 보기', { exact: true });
+  const finalChaos = await page.locator('.compact-metrics .meter strong').last().textContent();
+  await articles.click();
+  assert.equal(await articles.locator('..').locator('li').count(), 5);
+  assert.equal(await page.locator('.compact-metrics .meter strong').last().textContent(), finalChaos);
   await page.getByRole('button', { name: '인수인계서 작성하기' }).click();
 }
 
@@ -185,8 +192,11 @@ test('좁은 모바일 화면에서 스와이프, 버튼, 새로고침과 로컬
       await page.getByLabel('수업 참여 코드').fill('AABB0011');
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
       await page.getByRole('heading', { name: '당신은 새롭게 취임한 교육감입니다.' }).waitFor();
+      const rolePortrait = await page.locator('.intro-portrait svg').evaluate(svg => svg.outerHTML);
       await page.getByRole('button', { name: '게임 시작', exact: true }).click();
       await page.locator('#swipe').waitFor();
+      const teacherPortrait = await page.locator('#swipe .portrait svg').evaluate(svg => svg.outerHTML);
+      assert.notEqual(rolePortrait, teacherPortrait);
       assert.equal(await page.locator('.choices').textContent().then(text => /[+−][0-9]/.test(text)), false);
       assert.match(await page.locator('.date').textContent(), /2026년/);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth === innerWidth), true);
@@ -205,33 +215,40 @@ test('좁은 모바일 화면에서 스와이프, 버튼, 새로고침과 로컬
       await page.locator('#reject.choice-active').waitFor();
       assert.equal(await page.locator('.meter-preview:not([hidden])').count(), 3);
       await touch('touchEnd');
-      await page.getByText('2027년', { exact: false }).first().waitFor();
-      assert.equal(await page.locator('.news').count(), 0);
-      assert.equal(await page.locator('.meter-preview:not([hidden])').count(), 0);
-
-      // Two clicks on one card must count once even before its animation finishes.
-      await page.locator('#accept').evaluate(button => { button.click(); button.click(); });
       await page.locator('dialog[open]').waitFor();
       assert.ok(await page.locator('dialog[open]').evaluate(dialog => {
         const rect = dialog.getBoundingClientRect();
-        return rect.left >= 0 && rect.right <= innerWidth && rect.height <= innerHeight;
+        return rect.left >= 0 && rect.right <= innerWidth && rect.height <= innerHeight * 0.37;
       }));
+      assert.match(await page.locator('.date').textContent(), /2026년/);
+      assert.match(await page.locator('.news-masthead').textContent(), /2030년/);
+      assert.equal(await page.locator('dialog img').count(), 0);
       assert.equal(await page.locator('#accept').count(), 0);
+      assert.equal(await page.locator('.meter strong').last().textContent(), '80');
       await page.keyboard.press('Escape');
+      await page.mouse.click(3, 3);
       assert.equal(await page.locator('dialog[open]').count(), 1);
       assert.match(await page.locator('.chaos-change').textContent(), /사회혼란 증가 · \+5/);
-      await page.waitForFunction(() => document.querySelector('dialog img')?.naturalWidth > 0);
       await page.reload();
       await page.locator('dialog[open]').waitFor();
+      assert.equal(await page.locator('.meter strong').last().textContent(), '80');
       page.once('dialog', dialog => dialog.dismiss());
       await page.locator('[data-news-restart]').click();
       assert.equal(await page.locator('dialog[open]').count(), 1);
       await page.locator('[data-news-confirm]').click();
-      await page.getByText('정책 결정 3/5', { exact: true }).waitFor();
+      await page.getByText('정책 결정 2/5', { exact: true }).waitFor();
+      assert.equal(await page.locator('.meter-preview:not([hidden])').count(), 0);
       await page.reload();
-      await page.getByText('정책 결정 3/5', { exact: true }).waitFor();
+      await page.getByText('정책 결정 2/5', { exact: true }).waitFor();
       assert.equal(await page.locator('dialog[open]').count(), 0);
-      assert.equal(await page.locator('.meter strong').last().textContent(), '80');
+
+      await page.locator('#accept').evaluate(button => { button.click(); button.click(); });
+      await page.locator('dialog[open]').waitFor();
+      assert.match(await page.locator('.news-masthead').textContent(), /2031년/);
+      assert.match(await page.locator('.chaos-change').textContent(), /감소/);
+      assert.equal(await page.locator('.meter strong').last().textContent(), '70');
+      await page.locator('[data-news-confirm]').click();
+      await page.getByText('정책 결정 3/5', { exact: true }).waitFor();
       await finish(page);
       await page.getByLabel('앞으로 강화해야 할 교육').fill('디지털 리터러시');
       await page.reload();
@@ -288,6 +305,7 @@ test('수업 생성부터 학생 제출과 교사 결과 표시까지 확인한�
       await student.mouse.move(card.x + card.width / 2 + 90, card.y + 70, { steps: 3 });
       await student.locator('#accept.choice-active').waitFor();
       await student.mouse.up();
+      await student.locator('[data-news-confirm]').click();
       await student.getByText('2027년', { exact: false }).first().waitFor();
       await finish(student);
       await student.getByLabel('앞으로 강화해야 할 교육').fill('디지털·생태 융합교육');

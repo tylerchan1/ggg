@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { endingFor } from '../endings.js';
 import { classResults, validatePlayers } from '../class-results.js';
 import { crises, events, initialStats, metrics, news } from '../events.js';
 import { breaches, choose, finalReport, policyTitle, startGame } from '../game.js';
 
 const choices = ['reject', 'accept'];
 const summary = {
-  paths: 0, crisisPaths: 0, chained: 0, unresolved: 0, finalYearCrises: 0,
+  paths: 0, crisisPaths: 0, chained: 0, unresolved: 0, newsCrises: 0,
   finalBranches: { EVENT_05_A: 0, EVENT_05_B: 0 },
   crises: {}, lowest: [...initialStats], highest: [...initialStats],
   lowestFinal: [Infinity, Infinity, Infinity, Infinity], highestFinal: [-Infinity, -Infinity, -Infinity, -Infinity],
@@ -15,6 +16,7 @@ const basicPaths = new Set();
 const baseBranch = { EVENT_05_A: new Set(), EVENT_05_B: new Set() };
 const withCrises = new Set();
 const finished = [];
+const endingTitles = new Set();
 
 function updateRanges(state, lowest, highest) {
   state.stats.forEach((value, i) => {
@@ -43,11 +45,16 @@ function enumerate(state = startGame()) {
       withCrises.add(basic);
     }
     if (crisisHistory.length === 2 && crisisHistory[1].order === crisisHistory[0].order + 1) summary.chained++;
-    if (crisisHistory.some(item => item.year === 2036)) summary.finalYearCrises++;
+    if (crisisHistory.some(item => item.eventId === 'CRISIS_04' && decisions.some(decision =>
+      decision.order === item.order - 1))) summary.newsCrises++;
     const report = finalReport(state);
     if (report.unresolved.length) summary.unresolved++;
     assert.equal(report.unresolved.length, breaches(state.stats).length);
     assert.equal(report.news.length, 5);
+    assert.deepEqual(report.news, state.appliedNews);
+    const ending = endingFor(report.news);
+    assert.ok(ending?.title && ending.summary && ending.image);
+    endingTitles.add(ending.title);
     const expectedNews = decisions.map(item => news[events[item.eventId].choices[item.choice].newsId].year);
     assert.deepEqual(report.news.map(item => item.year), [2030, 2031, 2036, 2036, 2036]);
     assert.deepEqual(report.news.map(item => item.year), expectedNews);
@@ -64,14 +71,14 @@ function enumerate(state = startGame()) {
   }
 
   const id = state.currentEvent;
-  if (id === 'EVENT_02') assert.deepEqual(state.appliedNews, []);
+  assert.equal(state.appliedNews.length, state.decisions.length);
   if (id.startsWith('EVENT_03')) {
     assert.equal(id, state.decisions[0].choice === 'accept' ? 'EVENT_03_A' : 'EVENT_03_B');
-    assert.equal(state.appliedNews.at(-1).year, 2030);
+    assert.equal(state.appliedNews[0].year, 2030);
   }
   if (id.startsWith('EVENT_04')) {
     assert.equal(id, state.decisions[1].choice === 'accept' ? 'EVENT_04_A' : 'EVENT_04_B');
-    assert.equal(state.appliedNews.at(-1).year, 2031);
+    assert.equal(state.appliedNews[1].year, 2031);
   }
   if (id.startsWith('EVENT_05')) {
     const { problemSolving, responsibility } = state.competencies;
@@ -91,7 +98,8 @@ function enumerate(state = startGame()) {
       ? Math.max(0, value + choiceEffects[index]) : Math.min(100, value + choiceEffects[index]));
     if (!state.additionalBudgetGranted && next.additionalBudgetGranted) nextStats[0] = Math.min(100, nextStats[0] + 10);
     for (const story of next.appliedNews.slice(state.appliedNews.length)) {
-      assert.equal(story.year, next.year);
+      assert.equal(story.decisionYear, state.year);
+      assert.equal(story.year, news[story.id].year);
       assert.equal(story.socialChaosBefore, nextStats[3]);
       nextStats[3] = Math.max(0, nextStats[3] + story.socialChaos);
     }
@@ -103,8 +111,9 @@ function enumerate(state = startGame()) {
 test('32개 기본 경로와 모든 위기 대응 경로를 완주한다', () => {
   enumerate();
   assert.equal(basicPaths.size, 32);
+  assert.equal(endingTitles.size, 16);
   assert.ok(summary.chained > 0);
-  assert.ok(summary.finalYearCrises > 0);
+  assert.ok(summary.newsCrises > 0);
   assert.ok(summary.unresolved > 0);
   assert.equal(baseBranch.EVENT_05_A.size + baseBranch.EVENT_05_B.size, 32);
 });
@@ -136,11 +145,36 @@ test('정책·뉴스 수치와 위기 응답 순서가 명세와 일치한다', 
   assert.equal(choose(startGame(), 'EVENT_02', 'accept').decisions.length, 0);
 });
 
-test('축소된 사업은 원래 규모로 운영됐다고 보고하지 않는다', () => {
-  const example = finished.find(({ report }) => report.news.some(item => item.id === 'NEWS_03_B_ACCEPT'
-    && item.title.includes('초기 참여')));
-  assert.ok(example);
-  assert.ok(example.report.issues.some(item => item.includes('방과후 프로그램 축소')));
+test('정책 선택 즉시 뉴스를 반영하며 후속 사건과 위기 대응은 기존 순서를 따른다', () => {
+  let state = choose(startGame(), 'EVENT_01', 'accept');
+  assert.equal(state.currentEvent, 'EVENT_02');
+  assert.deepEqual([state.appliedNews[0].year, state.stats[3]], [2030, 85]);
+  state = choose(state, 'EVENT_02', 'reject');
+  assert.deepEqual([state.currentEvent, state.stats[3]], ['EVENT_03_A', 95]);
+  state = choose(state, 'EVENT_03_A', 'reject');
+  assert.deepEqual([state.currentEvent, state.year, state.stats[3]], ['CRISIS_04', 2030, 105]);
+  assert.equal(state.appliedNews.at(-1).statsAtPublication[3], 105);
+  state = choose(state, 'CRISIS_04', 'accept');
+  assert.deepEqual([state.currentEvent, state.stats[3], state.appliedNews.length], ['EVENT_04_B', 85, 3]);
+});
+
+test('최종 보고서가 표시한 기사와 기존 제출을 보존한다', () => {
+  const example = finished.find(({ report }) => report.news.some(item => item.id === 'NEWS_03_B_ACCEPT'));
+  assert.equal(example.report.news.find(item => item.id === 'NEWS_03_B_ACCEPT').title, news.NEWS_03_B_ACCEPT.title);
+  const old = startGame('scheduled');
+  const first = choose(old, 'EVENT_01', 'accept');
+  assert.deepEqual(first.appliedNews, []);
+  let historical = first;
+  while (historical.phase === 'playing') historical = choose(historical, historical.currentEvent, 'reject');
+  const results = validatePlayers([
+    { id: 'old', name: '과거', payload: { ...historical, status: 'submitted', finalReport: finalReport(historical), handover: {education: '가', reason: '나'} } },
+    { id: 'new', name: '현재', payload: { status: 'submitted', finalReport: example.report, handover: {education: '가', reason: '나'},
+      decisions: example.report.timeline.filter(item => item.eventId.startsWith('EVENT')),
+      crisisHistory: example.report.timeline.filter(item => item.eventId.startsWith('CRISIS')) } },
+  ]);
+  assert.deepEqual(results.map(item => item.payload.status), ['submitted', 'submitted']);
+  assert.deepEqual(results[0].payload.finalReport, finalReport(historical));
+  assert.deepEqual(results[1].payload.finalReport, example.report);
 });
 
 test('교사 통계에서 미경험 분기와 잘못된 학생 기록을 제외한다', () => {
@@ -164,7 +198,7 @@ test('경로 시뮬레이션과 밸런싱 지표 출력', () => {
   console.log(JSON.stringify({
     기본경로: basicPaths.size, 위기를경험한기본경로: withCrises.size,
     완결경로: summary.paths, 위기포함완결경로: summary.crisisPaths, 연쇄위기경로: summary.chained,
-    마지막해위기경로: summary.finalYearCrises, 미해결위기경로: summary.unresolved,
+    뉴스직후사회혼란위기경로: summary.newsCrises, 미해결위기경로: summary.unresolved,
     위기유형별분기지점: summary.crises,
     마지막사건기본경로: Object.fromEntries(Object.entries(baseBranch).map(([key, paths]) => [key, paths.size])),
     마지막사건완결경로: summary.finalBranches,

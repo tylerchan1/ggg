@@ -159,25 +159,36 @@ header nav { flex-wrap: wrap; justify-content: flex-end; }
 .shared-answer h3 span { display: inline-block; margin-left: 4px; color: var(--gold); font-size: 12px; }
 .shared-answer.own-answer { border-color: var(--gold); }
 
-/* The year remains visible until the news dialog takes focus. */
+/* Keep the selected policy card visible around the compact NEWS dialog. */
 .news-underlay { min-height: 240px; }
-.news-dialog { width: min(480px, calc(100% - 28px)); max-height: min(88dvh, 720px); overscroll-behavior: contain;
-  overflow: auto; color: #252018; background: #f6ebd4; border: 1px solid #b89b61; border-radius: 9px;
-  box-shadow: 0 18px 60px #0009; padding: clamp(15px, 5vw, 26px); }
-.news-dialog::backdrop { background: #080e16c9; }
-.news-masthead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
-  border-block: 2px solid #76532b; color: #704325; padding: 5px 0; margin-bottom: 12px; }
-.news-masthead strong { font: 800 25px Georgia, serif; letter-spacing: .12em; }
-.news-masthead span { font-size: 12px; font-weight: 700; }
-.news-dialog h2 { margin: 0 0 12px; font-size: clamp(22px, 6vw, 31px); line-height: 1.26; overflow-wrap: anywhere; }
-.story-art { width: 100%; height: auto; display: block; object-fit: cover; aspect-ratio: 1000 / 560; }
-.news-dialog .story-art { max-height: 25dvh; border-radius: 5px; }
-.news-body { margin: 13px 0; line-height: 1.6; }
-.chaos-change { width: fit-content; margin: 0; padding: 5px 9px; border-radius: 4px; font-weight: 750; }
+.news-dialog {
+  width: min(410px, calc(100% - 24px));
+  max-height: min(36dvh, 285px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  box-sizing: border-box;
+  color: #252018;
+  background: #f6ebd4;
+  border: 1px solid #b89b61;
+  border-radius: 9px;
+  padding: 9px 12px;
+}
+.news-dialog[open] { display: grid; }
+.news-dialog::backdrop { background: #080e164d; }
+.news-masthead { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #b89b61; color: #704325; }
+.news-masthead strong { font: 800 17px Georgia, serif; letter-spacing: .06em; }
+.news-masthead span { margin-right: auto; font-size: 12px; font-weight: 700; }
+.news-article { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.news-dialog h2 { margin: 1px 0 4px; font-size: clamp(16px, 4.5vw, 21px); line-height: 1.26; overflow-wrap: anywhere; }
+.news-body { margin: 0; font-size: 13px; line-height: 1.45; }
+.news-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.news-footer button { min-width: 66px; padding: 7px 11px; }
+.chaos-change { margin: 0; padding: 4px 7px; border-radius: 4px; font-size: 13px; font-weight: 750; }
 .chaos-up { color: #852e27; background: #f6d6ca; }
 .chaos-down { color: #245c43; background: #dbe9d7; }
-.news-restart { display: block; margin: 7px auto 0; border: 0; background: transparent; color: #59412a; font-size: 12px; }
-.news-restart:hover { color: #fff; }
+.news-restart { min-height: 32px; padding: 3px 8px; border: 0; background: transparent; color: #59412a; }
+.news-restart:hover, .news-restart:focus-visible { color: #fff; }
+.story-art { width: 100%; height: auto; display: block; object-fit: cover; aspect-ratio: 1000 / 560; }
 
 /* The epilogue keeps the story above its supporting metrics and records. */
 .epilogue { overflow: hidden; color: #f5e8d2; background: #1b2835; border: 1px solid #4e4d45; border-radius: 10px; }
@@ -185,6 +196,9 @@ header nav { flex-wrap: wrap; justify-content: flex-end; }
 .epilogue-hero .story-art { aspect-ratio: 16 / 9; }
 .epilogue-hero > div { padding: 19px 19px 4px; }
 .epilogue-hero .mini { color: var(--gold); }
+.epilogue-hero h3 { color: var(--gold); font-size: clamp(18px, 5.2vw, 23px); line-height: 1.35; margin: 0 0 8px; }
+.epilogue-final-policy { color: var(--muted); font-size: 13px; }
+.epilogue-final-policy strong { color: #e4d3b6; display: block; }
 .epilogue-hero h2 { font-size: clamp(25px, 7vw, 34px); line-height: 1.2; margin: 6px 0 12px; letter-spacing: -.025em; }
 .epilogue-hero p, .epilogue-feature p, .epilogue-section li { line-height: 1.6; }
 .epilogue-section, .epilogue-details { border-top: 1px solid #495562; padding: 15px 18px; }

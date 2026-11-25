@@ -1,4 +1,5 @@
 import { metrics } from './events.js';
+import { endingFor } from './endings.js';
 import { illustration, storyTopic, topicLabel } from './visuals.js';
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -56,7 +57,7 @@ export function animateMeters(group, previous, current) {
 
 export function newsList(stories) {
   return stories.map(story => `<li><strong>${story.year}년 · ${escapeHtml(story.title)}</strong>
-    <p>${escapeHtml(story.detail)}</p></li>`).join('');
+    <p>${escapeHtml(story.detail)}</p><small>사회혼란 ${signed(story.socialChaos)}</small></li>`).join('');
 }
 
 export function renderTimeline(timeline) {
@@ -84,16 +85,19 @@ export function renderReport(report, expandTimeline = false) {
 
 function renderEpilogue(report, list) {
   const finale = report.news.at(-1);
+  const ending = endingFor(report.news);
   const lead = report.news.find(story => story.year === 2036 && story.socialChaos < 0) ?? finale;
   const challenge = [...report.news].sort((a, b) => b.socialChaos - a.socialChaos)[0];
   const remainingAchievements = report.achievements.filter(text => text !== lead.achievement && text !== finale.achievement);
   const remainingIssues = report.issues.filter(text => text !== challenge.issue);
   return `<article class="epilogue">
     <header class="epilogue-hero">
-      ${illustration(storyTopic(finale))}
+      ${illustration(ending?.image ?? storyTopic(finale))}
       <div><p class="mini">2036년 · 교육감 임기 종료</p>
       <h2 id="report-title" tabindex="-1">2036년, 당신이 만들어낸 미래</h2>
-      <p>${escapeHtml(finale.detail)}</p></div>
+      ${ending ? `<h3>${escapeHtml(ending.title)}</h3><p>${escapeHtml(ending.summary)}</p>
+      <p class="epilogue-final-policy"><strong>마지막 정책의 결과</strong> ${escapeHtml(finale.detail)}</p>`
+      : `<p>${escapeHtml(finale.detail)}</p>`}</div>
     </header>
     <section class="epilogue-section">
       <h3>우리가 이루어낸 변화</h3>

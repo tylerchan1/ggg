@@ -5,9 +5,10 @@ import {
 const maxCrises = 2;
 const phases = ['report', 'handover', 'complete'];
 
-export function startGame() {
+export function startGame(newsTiming = 'immediate') {
   return {
     year: regularYears[0],
+    newsTiming,
     stats: [...initialStats],
     competencies: { problemSolving: 0, responsibility: 0 },
     phase: 'playing',
@@ -69,17 +70,28 @@ function advance(state) {
     applyEffects(state, [additionalBudget.amount, 0, 0, 0]);
   }
 
-  for (const decision of state.decisions) {
-    const newsId = events[decision.eventId].choices[decision.choice].newsId;
-    const story = news[newsId];
-    if (story.year !== state.year || state.appliedNews.some(item => item.id === newsId)) continue;
-    state.appliedNews.push({ id: newsId, ...resolveStory(state, newsId, decision), socialChaosBefore: state.stats[3] });
-    applyEffects(state, [0, 0, 0, story.socialChaos]);
-    if (showCrisis(state)) return;
+  // Existing saves and submissions retain their original event order and crisis decisions.
+  if (state.newsTiming !== 'immediate') {
+    for (const decision of state.decisions) {
+      const newsId = events[decision.eventId].choices[decision.choice].newsId;
+      if (news[newsId].year !== state.year || state.appliedNews.some(item => item.id === newsId)) continue;
+      publishNews(state, newsId, decision);
+      if (showCrisis(state)) return;
+    }
   }
 
   state.currentEvent = branch(state);
   if (!state.currentEvent) state.phase = 'report';
+}
+
+function publishNews(state, newsId, decision) {
+  const story = { id: newsId, ...resolveStory(state, newsId, decision), socialChaosBefore: state.stats[3] };
+  applyEffects(state, [0, 0, 0, story.socialChaos]);
+  if (state.newsTiming === 'immediate') {
+    story.decisionYear = decision.year;
+    story.statsAtPublication = [...state.stats];
+  }
+  state.appliedNews.push(story);
 }
 
 function resolveStory(state, newsId, decision) {
@@ -116,6 +128,7 @@ export function choose(previous, eventId, choice) {
   if (eventId in events) {
     state.decisions.push(record);
     for (const [key, value] of Object.entries(option.competencies)) state.competencies[key] += value;
+    if (state.newsTiming === 'immediate') publishNews(state, option.newsId, record);
   } else {
     state.crisisHistory.push(record);
   }
@@ -127,17 +140,20 @@ export function choose(previous, eventId, choice) {
 export function finalReport(state) {
   if (!phases.includes(state.phase)) return null;
   const stories = state.appliedNews.map(item => {
-    if (item.year !== finalYear) return item;
+    if (state.newsTiming === 'immediate' || item.year !== finalYear) return item;
     const decision = state.decisions.find(({ eventId, choice }) => events[eventId].choices[choice].newsId === item.id);
     return { id: item.id, ...resolveStory(state, item.id, decision) };
   });
+  const outcomes = state.newsTiming === 'immediate'
+    ? state.decisions.map(decision => resolveStory(state, events[decision.eventId].choices[decision.choice].newsId, decision))
+    : stories;
   const responses = state.crisisHistory.map(({ eventId, choice }) => crisisById[eventId].choices[choice]);
   return {
     stats: [...state.stats],
     unresolved: breaches(state.stats).map(item => ({ title: item.title, value: state.stats[item.metric] })),
     news: stories,
-    achievements: [...stories, ...responses].map(item => item.achievement).filter(Boolean),
-    issues: [...stories, ...responses].map(item => item.issue).filter(Boolean),
+    achievements: [...outcomes, ...responses].map(item => item.achievement).filter(Boolean),
+    issues: [...outcomes, ...responses].map(item => item.issue).filter(Boolean),
     timeline: [...state.decisions, ...state.crisisHistory].sort((a, b) => a.order - b.order),
   };
 }

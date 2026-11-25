@@ -8,7 +8,10 @@ export function validatePlayers(players) {
     if (!Array.isArray(decisions) || decisions.length > 5 || !Array.isArray(crisisHistory) || crisisHistory.length > 2) {
       return { id, name, payload: { status: 'invalid' } };
     }
-    let state = startGame();
+    const articles = payload?.finalReport?.news;
+    const immediate = Array.isArray(articles) && articles.some(item => Number.isInteger(item?.decisionYear));
+    const historical = payload?.status === 'submitted' && !immediate;
+    let state = startGame(historical ? 'scheduled' : 'immediate');
     const records = [...decisions, ...crisisHistory];
     for (let order = 0; order < records.length; order++) {
       const record = records.find(item => item?.order === order);

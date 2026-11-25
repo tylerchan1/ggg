@@ -1,4 +1,5 @@
 const portraits = {
+  superintendent: ['#5d4937', '#d8ac8a', '#b4a698', '#303e52', 3],
   info: ['#36536c', '#c49c79', '#38303b', '#738b9b', 0],
   principal: ['#495e55', '#e0b698', '#49372c', '#9ba57a', 1],
   researcher: ['#475b7b', '#dfb48e', '#37313e', '#7895b7', 2],
@@ -13,12 +14,15 @@ const hairstyles = [
   'M149 67 145 43 163 27 201 22 229 37 235 59 222 64 212 45 187 53 163 44 156 65Z',
   'M145 112 142 49 159 26 195 20 225 32 238 53 233 115 220 122 226 59 204 40 176 52 155 53 158 117Z',
   'M149 65 141 44 158 24 195 18 221 30 239 48 226 65 213 46 194 57 172 43 157 65Z',
+  'M148 68 143 47 155 31 176 25 204 18 225 26 237 44 232 65 221 73 221 53 210 42 184 49 163 46 154 56 156 71Z',
 ];
 
 const glasses = `<g fill="none" stroke="#303b45" stroke-width="2"><rect x="157" y="70" width="30" height="17" rx="3"/>
   <rect x="194" y="70" width="30" height="17" rx="3"/>
   <path d="M187 76H194"/>
 </g>`;
+
+const superintendentBadge = '<path d="m224 137 5 5-5 5-5-5Z" fill="#d9b77a"/>';
 
 export function portrait(key) {
   const [bg, skin, hair, coat, style] = portraits[key];
@@ -38,5 +42,6 @@ export function portrait(key) {
     <path d="M190 78 185 89 194 91M179 103Q190 108 201 103" stroke="#896252" stroke-width="2" fill="none"/>
     ${style === 0 ? glasses : ''}
     <path d="M120 141 157 127 170 185H136Z M260 141 223 127 210 185H244Z" fill="#16212d" opacity=".18"/>
+    ${key === 'superintendent' ? superintendentBadge : ''}
   </svg>`;
 }

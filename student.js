@@ -127,8 +127,7 @@ export function mountStudent(app) {
       const pendingSubmission = entry.sessionId && state.phase === 'complete' && !entry.submission
         ? (entry.pendingSubmission ?? { runId: entry.runId, payload: snapshot(state) })
         : entry.pendingSubmission;
-      const newsFromYear = state.appliedNews.length > entry.state.appliedNews.length ? entry.state.year : entry.newsFromYear;
-      persist({ ...entry, state, pendingSubmission, newsFromYear, revision: entry.revision + 1 });
+      persist({ ...entry, state, pendingSubmission, revision: entry.revision + 1 });
     }
     render(focus, previousStats);
     sync();
@@ -143,7 +142,7 @@ export function mountStudent(app) {
     const reset = startGame();
     const saved = load(key(entry.code));
     if (saved?.revision > entry.revision && saved.playerId === entry.playerId) entry = saved;
-    persist({ ...entry, state: reset, rolePending: false, newsSeen: 0, newsFromYear: null, submission: entry.submission ? 'duplicate' : null, runId: entry.sessionId ? crypto.randomUUID() : undefined,
+    persist({ ...entry, state: reset, rolePending: false, newsSeen: 0, submission: entry.submission ? 'duplicate' : null, runId: entry.sessionId ? crypto.randomUUID() : undefined,
       revision: entry.revision + 1 });
     locked = false;
     render(true);
@@ -243,7 +242,7 @@ export function mountStudent(app) {
 
   function renderRole() {
     app.innerHTML = `<section class="intro role-intro">
-      <div class="intro-portrait">${portrait('info')}</div>
+      <div class="intro-portrait">${portrait('superintendent')}</div>
       <p class="role-year">2026년</p>
       <h2 tabindex="-1">당신은 새롭게 취임한 교육감입니다.</h2>
       <p>한정된 수업 시간과 예산으로 어떤 교육에 투자할지 결정하세요. 정책을 선택하고, 몇 년 뒤 학생들의 배움이 사회를 어떻게 바꾸었는지 확인해 보세요.</p>
@@ -428,15 +427,14 @@ export function mountStudent(app) {
     }
     const nextNews = state.appliedNews[entry.newsSeen ?? state.appliedNews.length];
     if (nextNews) {
-      const stageStats = [...state.stats];
-      stageStats[3] = nextNews.socialChaosBefore ?? stageStats[3];
+      const stageStats = nextNews.statsAtPublication ?? state.stats;
       const lastDecision = [...state.decisions, ...state.crisisHistory].reduce((latest, item) =>
         !latest || latest.order < item.order ? item : latest, null);
       const previousEvent = events[lastDecision?.eventId] ?? crisisById[lastDecision?.eventId];
-      showNews(app, nextNews, entry.newsFromYear, stageStats, previousEvent ? cardContents(previousEvent) : '', () => {
+      showNews(app, nextNews, lastDecision?.year ?? state.year, stageStats, previousEvent ? cardContents(previousEvent) : '', () => {
         const saved = load(key(entry.code));
         if (saved?.playerId === entry.playerId && saved.revision > entry.revision) entry = saved;
-        else persist({ ...entry, newsSeen: entry.newsSeen + 1, newsFromYear: nextNews.year, revision: entry.revision + 1 });
+        else persist({ ...entry, newsSeen: entry.newsSeen + 1, revision: entry.revision + 1 });
         render(true, stageStats);
       }, restart);
       return;
@@ -484,6 +482,9 @@ export function mountStudent(app) {
     const resume = async () => {
       try {
         if (await studentIdentity() !== entry?.playerId) entry = null;
+        if (entry && !entry.state.newsTiming && entry.state.decisions.length === 0) {
+          persist({ ...entry, state: { ...entry.state, newsTiming: 'immediate' } });
+        }
         if (entry && entry.newsSeen === undefined) persist({ ...entry, newsSeen: entry.state.appliedNews.length });
         render();
         sync();
