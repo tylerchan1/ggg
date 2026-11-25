@@ -12,28 +12,29 @@ python3 -m http.server 8000
 
 - 학생 화면은 [http://localhost:8000](http://localhost:8000)에서 엽니다.
 - 교사 화면은 [http://localhost:8000/?teacher=1](http://localhost:8000/?teacher=1)에서 엽니다.
-- 기본 설정은 연습 모드입니다. 게임 진행, 작성 중인 답변, 완료한 인수인계서는 같은 브라우저에 저장됩니다. 저장된 연습은 마지막 화면에서 새로 시작할 수 있습니다.
+- 기본 설정은 연습 모드입니다. 게임 진행, 작성 중인 답변, 완료한 인수인계서는 같은 브라우저에 저장됩니다. 게임 상단의 **↻ 처음부터**로 진행 중 언제든 다시 시작할 수 있습니다. Firebase 연결을 시도하다 실패한 경우에도 연습 모드를 이용할 수 있습니다.
 
-## Supabase로 수업 연결
+## Firebase 콘솔에서 직접 설정하기
 
-1. Supabase 프로젝트의 SQL Editor에서 `supabase/schema.sql`을 실행합니다.
-2. Authentication의 Users에서 이메일·비밀번호로 로그인할 교사 사용자를 만듭니다. 사용자 UID를 확인하고 아래 쿼리의 값을 바꿔 SQL Editor에서 실행합니다.
+아래 순서대로 설정합니다. 현재 프로젝트는 `re-edu`이고 웹 앱 설정은 `config.js`에 들어 있습니다.
 
-   ```sql
-   insert into public.re_teachers (user_id)
-   values ('교사 사용자 UID')
-   on conflict do nothing;
-   ```
+1. [Firebase 콘솔](https://console.firebase.google.com/)의 **프로젝트 만들기**에서 프로젝트를 생성합니다. Google 애널리틱스는 선택 사항입니다. 이 앱은 Spark 요금제의 Authentication과 Cloud Firestore를 사용하며, Cloud Functions나 결제 정보가 필요하지 않습니다.
+2. **빌드 → Authentication → 시작하기 → 로그인 방법**에서 **익명**과 **이메일/비밀번호**를 각각 사용 설정하고 저장합니다. 이메일 링크 옵션은 사용하지 않습니다.
+3. **빌드 → Firestore Database → 데이터베이스 만들기**를 선택합니다. 버전 선택이 나오면 **Standard**, 데이터베이스 ID는 **(default)**를 선택합니다. 위치는 수업 환경에 맞게 선택하고 **프로덕션 모드에서 시작**합니다.
+4. **Firestore Database → 규칙**에서 [firestore.rules](./firestore.rules) 전체를 붙여넣고 **게시**합니다. 교사 계정은 자신이 만든 수업만 접근할 수 있고, 학생은 참여 이후 자기 기록만 읽을 수 있습니다.
+5. **Authentication → 사용자 → 사용자 추가**를 눌러 교사 이메일과 비밀번호를 등록합니다. 사용자 목록에서 해당 사용자의 **UID**를 복사합니다. **Firestore Database → 데이터 → 컬렉션 시작**을 눌러 컬렉션 ID를 `teachers`로 지정합니다. 문서 ID에 복사한 UID를 그대로 붙여넣고, 필드 이름 `role`, 유형 `string`, 값 `teacher`를 입력해 저장합니다. 이미 `teachers` 컬렉션이 있으면 **문서 추가**를 사용합니다. 교사 비밀번호는 채팅이나 저장소에 공유할 필요가 없습니다.
+6. 다른 Firebase 프로젝트에서 실행하려면 **프로젝트 설정 → 일반 → 내 앱 → 웹 앱(</>)**에서 웹 앱을 등록합니다. Firebase Hosting 체크박스는 비워 두고 **SDK 설정 및 구성**의 `firebaseConfig` 객체를 `config.js`에 넣습니다. 이 객체는 공개 웹 앱 설정입니다. 서비스 계정 키나 교사 비밀번호와 같은 비공개 인증 정보는 저장소에 넣지 않습니다. Firebase를 비활성화하려면 `firebaseConfig`를 `null`로 설정합니다.
 
-3. `config.js`에 Project URL과 **publishable key** 또는 기존 **anon key**를 입력합니다. 이 파일은 브라우저에 공개됩니다. Secret key, service-role key, 교사 비밀번호는 Supabase 내부에서 관리합니다.
-4. 교사 화면에서 로그인하고 **새 수업 만들기**를 누릅니다. 학생에게 접속 URL 또는 QR코드를 공유합니다. 학생은 교사가 지정한 별칭과 참여 코드로 접속할 수 있으며 학생 계정이 필요 없습니다. QR코드로 접속하면 코드가 미리 입력됩니다.
-5. 테스트 별칭으로 참여하고 인수인계서를 제출합니다. 교사 화면에서 참여 인원, 학생별 기록 및 답변이 갱신되는지 확인합니다.
+## GitHub Pages 및 실제 연결 확인
 
-수업 데이터는 수업을 생성한 교사만 조회할 수 있습니다. 학생의 브라우저에 보관되는 개별 토큰은 자신의 기록 쓰기에만 사용됩니다. 대시보드는 Supabase Realtime 변경 알림으로 갱신하며 5초마다 다시 조회합니다. 전송 실패 후에는 저장된 데이터를 다시 보낼 수 있습니다. 같은 학생의 진행 상태를 이어갈 때는 처음 참여한 브라우저를 사용하세요.
+저장소의 **Settings → Pages → Build and deployment**에서 **Deploy from a branch**와 배포 브랜치의 **/(root)**를 선택합니다. 이미 Pages를 사용 중이라면 기존 배포 브랜치를 유지합니다. 승인된 변경사항이 배포된 HTTPS 주소에서 교사 화면(`?teacher=1`)을 열면 학생 URL과 QR코드에 같은 배포 주소가 사용됩니다.
 
-## GitHub Pages
+- 교사 계정으로 로그인해 새 수업을 만든 뒤 참여 코드, URL, QR코드를 확인합니다.
+- 별도의 브라우저 또는 휴대폰으로 참여해 별칭을 입력하고 게임을 진행합니다. 참가하면 상단 집계가 바뀌고, 최종 제출하면 새로고침 없이 게시판에 카드가 표시되어야 합니다. 카드에서 사회 보고서, NEWS, 정책 결정 및 긴급 대응 기록을 확인합니다.
+- 여러 기기로 동시에 참여하고, 진행 중 새로고침과 **↻ 처음부터**를 확인합니다. 제출을 다시 시도하면 첫 제출이 남아야 합니다. 인터넷을 끊은 상태에서 제출한 뒤 연결을 복구해 **다시 전송하기**도 확인합니다.
+- 다른 교사 또는 등록되지 않은 교사 계정으로 첫 교사의 수업에 접근할 수 없는지 확인합니다. 학생의 타인 기록 접근과 제출 불변성은 Firestore Emulator 테스트에서도 확인할 수 있습니다.
 
-저장소의 **Settings → Pages → Build and deployment**에서 **Deploy from a branch**를 고르고 배포 브랜치와 **/(root)**를 선택합니다. 정적 파일은 상대 경로를 사용하고 `.nojekyll`을 포함합니다. 발급된 HTTPS 주소에서 교사 화면을 열어야 해당 배포 주소가 학생 URL과 QR코드에 반영됩니다. 수업 공유 데이터는 Supabase에 저장됩니다.
+브라우저마다 Firebase 익명 인증으로 학생을 구분합니다. 같은 브라우저에서 다시 참여하면 그 수업의 기존 별칭과 제출 기록을 사용합니다. 다른 기기나 브라우저 데이터를 지운 뒤 접속하면 새 익명 학생으로 등록됩니다. 진행 상태는 브라우저에 저장하고, Firestore에는 참여 시각과 제출 시점의 정책 기록·보고서·인수인계서를 저장합니다. 제출 요청의 재시도는 같은 결과로 처리되며, 같은 수업에서 재플레이해도 이미 제출한 결과는 보관됩니다.
 
 ## 코드 구조
 
@@ -43,7 +44,7 @@ python3 -m http.server 8000
 | `game.js` | 게임 상태 전이, 지표 갱신, 분기, 지연 뉴스, 위기 감지와 최종 보고서 |
 | `student.js`, `ui.js`, `styles.css`, `portraits.js` | 학생 화면, 조작, 진행·인수인계서 저장, 기존 카드 스타일 |
 | `teacher.js`, `class-results.js` | 수업 관리, 학생별 결과, 분기별 집계 |
-| `backend.js`, `config.js`, `supabase/schema.sql` | Supabase 인증, 수업 참여, 데이터 접근 권한, 제출과 실시간 갱신 |
+| `backend.js`, `config.js`, `firestore.rules`, `firebase.json` | Firebase 인증, 수업 참여, 데이터 접근 권한, 제출과 실시간 갱신 |
 
 동시에 위기가 발생하면 예산, 학생 지지도, 교사 지지도, 사회혼란 순으로 처리합니다. 2036년 뉴스는 2030·2031·2033년 결정 순서로 적용하며 각 기사 적용 후 위기를 확인합니다. 프로그램 축소 이전에 이미 축적된 성과는 기록하고, 이후 참여 기회와 확산이 줄어든 결과를 관련 기사에 반영합니다. 뉴스의 사회혼란 변화량은 기획 수치를 적용합니다.
 
@@ -56,7 +57,13 @@ npm ci
 npm test
 ```
 
-`npm run test:game`은 경로, 지표, 위기 통계를 출력합니다. `npm run test:browser`는 Chromium에서 학생·교사 흐름을 검증합니다. 기본 위치에 Chromium이 없으면 `CHROMIUM_PATH`에 실행 파일 경로를 지정하세요. 연결 기능은 테스트 서버로 검증하며 `npm run test:database`는 로컬 PostgreSQL 엔진에서 실제 SQL 스키마와 접근 제어를 검사합니다.
+`npm run test:game`은 경로, 지표, 위기 통계를 출력합니다. `npm run test:browser`는 Chromium에서 학생·교사 흐름을 검증합니다. 기본 위치에 Chromium이 없으면 `CHROMIUM_PATH`에 실행 파일 경로를 지정하세요. 브라우저 테스트는 모의 Firebase SDK를 사용합니다. 실제 Firebase 프로젝트에 연결하는 검증은 위 배포 확인 절차로 진행합니다.
+
+Firestore 보안 규칙을 별도로 실행하려면 Java 21을 설치하고 다음 명령을 실행하세요. 공개 Firebase 프로젝트에 쓰기 작업을 하지 않도록 예제 프로젝트 ID를 사용합니다. 기본 테스트는 에뮬레이터가 꺼져 있으면 이 테스트를 건너뜁니다.
+
+```sh
+npx firebase-tools@15.37.0 emulators:exec --only firestore --project demo-re-education "npm run test:rules"
+```
 
 | 지표 | 진행 중 최솟값–최댓값 | 2036년 최솟값–최댓값 |
 | --- | ---: | ---: |
